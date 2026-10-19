@@ -1,4 +1,3 @@
-import posthog from "posthog-js";
 import {
   FIRST_TOUCH_KEY,
   firstTouchFrom,
@@ -7,6 +6,7 @@ import {
   type FirstTouch,
 } from "./lib/download-attribution";
 import { ANON_COOKIE, INTERNAL_COOKIE, parseVisitorOs } from "./lib/os";
+import { posthogNow, posthogOff, posthogReady, posthogStarting } from "./lib/posthog-client";
 
 const key = process.env.NEXT_PUBLIC_POSTHOG_KEY ?? process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN;
 
@@ -43,7 +43,9 @@ function isInternalBrowser() {
 
 const internal = isInternalBrowser();
 
-if (key && !isLocalHost(window.location.hostname) && !internal) {
+/** posthog-js is large, so it loads after the page does and first paint never waits on analytics. */
+async function startPosthog(key: string) {
+  const { default: posthog } = await import("posthog-js");
   const persisted = readCookie(`ph_${key}_posthog`);
   const anon = readCookie(ANON_COOKIE);
 
@@ -66,18 +68,57 @@ if (key && !isLocalHost(window.location.hostname) && !internal) {
     persistence: "localStorage+cookie",
     bootstrap: !persisted && anon ? { distinctID: anon } : undefined,
     loaded: (client) => {
-      const uaData = (navigator as Navigator & { userAgentData?: { platform: string; mobile: boolean } })
-        .userAgentData;
-      client.register({
-        site: "helicon_landing",
-        visitor_os: parseVisitorOs(
-          navigator.userAgent,
-          uaData ? { platform: uaData.platform, mobile: uaData.mobile } : undefined,
-        ),
-      });
+      client.register(siteProperties());
       client.startSessionRecording();
     },
   });
+  posthogReady(posthog);
+}
+
+/** After the load event, once the main thread is free, so it never competes with the first paint. */
+function afterLoad(run: () => void) {
+  const idle = () => (window.requestIdleCallback ? window.requestIdleCallback(run, { timeout: 2000 }) : setTimeout(run, 1));
+  if (document.readyState === "complete") idle();
+  else window.addEventListener("load", idle, { once: true });
+}
+
+/** The properties loaded() registers below, for events sent before posthog-js is up. */
+function siteProperties() {
+  const uaData = (navigator as Navigator & { userAgentData?: { platform: string; mobile: boolean } }).userAgentData;
+  return {
+    site: "helicon_landing",
+    visitor_os: parseVisitorOs(navigator.userAgent, uaData ? { platform: uaData.platform, mobile: uaData.mobile } : undefined),
+  };
+}
+
+/** The id posthog-js would use: the one it saved on an earlier visit, or the anon cookie it bootstraps from. */
+function knownDistinctId(key: string) {
+  try {
+    const persisted = readCookie(`ph_${key}_posthog`);
+    const id = persisted ? (JSON.parse(persisted) as { distinct_id?: unknown }).distinct_id : undefined;
+    if (typeof id === "string" && id) return id;
+  } catch {
+    // A cookie we cannot read is the same as no cookie.
+  }
+  return readCookie(ANON_COOKIE);
+}
+
+if (key && !isLocalHost(window.location.hostname) && !internal) {
+  posthogStarting({
+    key,
+    host: "/relay-hx",
+    distinctId: () => knownDistinctId(key),
+    properties: () => ({
+      ...siteProperties(),
+      $current_url: window.location.href,
+      $host: window.location.host,
+      $pathname: window.location.pathname,
+      $lib: "web-beacon",
+    }),
+  });
+  afterLoad(() => void startPosthog(key).catch(posthogOff));
+} else {
+  posthogOff();
 }
 
 /** Where this browser first came from, kept for the life of its localStorage. */
@@ -106,10 +147,10 @@ function attributeDownload(event: MouseEvent) {
   const link = (event.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
   const href = link?.getAttribute("href");
   if (!link || !href || !isDownloadHref(href, window.location.origin)) return;
-  const loaded = Boolean((posthog as unknown as { __loaded?: boolean }).__loaded);
+  const posthog = posthogNow();
   const attributed = withAttribution(href, window.location.origin, {
-    distinctId: loaded ? posthog.get_distinct_id() : readCookie(ANON_COOKIE),
-    sessionId: loaded ? posthog.get_session_id() : null,
+    distinctId: posthog ? posthog.get_distinct_id() : readCookie(ANON_COOKIE),
+    sessionId: posthog ? posthog.get_session_id() : null,
     firstTouch: touch,
   });
   link.setAttribute("href", attributed);
