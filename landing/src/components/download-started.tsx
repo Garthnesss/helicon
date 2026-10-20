@@ -1,22 +1,17 @@
 "use client";
 
-import { CheckCircle, DeviceMobile, X } from "@phosphor-icons/react";
-import { Dialog } from "radix-ui";
-import { useEffect, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { trackEvent } from "@/lib/client-analytics";
 import { classifyCta } from "@/lib/cta-events";
 import { isHandheldBrowser } from "@/lib/device";
-import { installerPath } from "@/lib/downloads";
 import { parseVisitorOs } from "@/lib/os";
 import type { InstallerOs } from "./download-next-steps";
-import { SendToDesktop } from "./send-to-desktop";
-import { TrackedLink } from "./tracked-link";
+import type { Shown } from "./download-dialog";
 
-const LABEL: Record<InstallerOs, string> = { windows: "Windows", macos: "macOS" };
-
-type Shown =
-  | { mode: "steps"; os: InstallerOs }
-  | { mode: "send"; os: InstallerOs; href: string };
+// The dialog (and the Radix code under it) loads on the first installer click, not with the page.
+const loadDialog = () => import("./download-dialog");
+const DownloadDialog = dynamic(loadDialog, { ssr: false });
 
 /** The computer the visitor is on, when it is one that has an installer. */
 function visitorInstallerOs(): InstallerOs | null {
@@ -40,7 +35,12 @@ function visitorInstallerOs(): InstallerOs | null {
  */
 export function DownloadStarted({ steps }: { steps: Record<InstallerOs, ReactNode> }) {
   const [shown, setShown] = useState<Shown | null>(null);
+  // Kept mounted after the first show, so closing still plays the exit animation.
+  const [everShown, setEverShown] = useState(false);
+  if (shown && !everShown) setEverShown(true);
   const [visitorOs, setVisitorOs] = useState<InstallerOs | null>(null);
+  // The link that opened the dialog. There is no Dialog.Trigger, so focus goes back here by hand.
+  const opener = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     function onClick(event: MouseEvent) {
@@ -52,9 +52,16 @@ export function DownloadStarted({ steps }: { steps: Record<InstallerOs, ReactNod
       if (name !== "download_click") return;
       const target = properties.target_os;
       if (target !== "windows" && target !== "macos") return;
+      // Links inside the dialog (wrong-OS installer, "download anyway") are gone once it updates.
+      if (!link.closest('[role="dialog"]')) opener.current = link as HTMLElement;
       if (!link.hasAttribute("data-download-anyway") && isHandheldBrowser()) {
         event.preventDefault();
         setShown({ mode: "send", os: target, href });
+        // The click was cancelled for the dialog; if its code will not load, follow the link after all.
+        loadDialog().catch(() => {
+          setShown(null);
+          window.location.assign(href);
+        });
         trackEvent("send_to_desktop_shown", {
           target_os: target,
           placement: link.getAttribute("data-ph-placement") ?? null,
@@ -68,61 +75,7 @@ export function DownloadStarted({ steps }: { steps: Record<InstallerOs, ReactNod
     return () => document.removeEventListener("click", onClick);
   }, []);
 
-  const os = shown?.os ?? null;
-  const send = shown?.mode === "send";
-  const wrongOs = shown?.mode === "steps" && visitorOs && visitorOs !== shown.os ? visitorOs : null;
-
-  return (
-    <Dialog.Root open={shown !== null} onOpenChange={(open) => (open ? null : setShown(null))}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="overlay-fade fixed inset-0 z-[300] bg-[oklch(0.1_0.01_255/0.45)]" />
-        <Dialog.Content className="modal-pop fixed top-1/2 left-1/2 z-[310] max-h-[calc(100dvh-32px)] w-[min(560px,calc(100%-16px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-raised p-5 text-fg shadow-pop outline-none sm:p-7">
-          <div className="flex items-start gap-3">
-            <span
-              aria-hidden="true"
-              className="inline-flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-tint text-accent-text shadow-[inset_0_0_0_1px_var(--tint-strong)]"
-            >
-              {send ? <DeviceMobile weight="duotone" className="size-5" /> : <CheckCircle weight="duotone" className="size-5" />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <Dialog.Title className="font-headline text-[22px] leading-tight font-semibold tracking-[-0.01em] text-fg sm:text-[24px]">
-                {send ? "Helicon runs on Windows, macOS and Linux" : "Your download is starting"}
-              </Dialog.Title>
-              <Dialog.Description className="mt-1 text-[14.5px] leading-relaxed text-muted">
-                {send
-                  ? "It is a desktop app, so it can't install on a phone or tablet. Send yourself the link and open it on your computer."
-                  : `Helicon for ${os ? LABEL[os] : "your computer"} is on its way. Three steps and you are in.`}
-              </Dialog.Description>
-              {wrongOs ? (
-                <p className="mt-2 text-[13.5px] leading-relaxed text-muted">
-                  You look to be on {LABEL[wrongOs]}.{" "}
-                  <TrackedLink
-                    href={installerPath(wrongOs, "wrong-os-hint")}
-                    placement="wrong-os-hint"
-                    eventLabel={`Download for ${LABEL[wrongOs]}`}
-                    className="font-medium text-accent-text underline-offset-4 hover:underline"
-                  >
-                    Get the {LABEL[wrongOs]} installer instead
-                  </TrackedLink>
-                </p>
-              ) : null}
-            </div>
-            <Dialog.Close
-              aria-label="Close"
-              className="-mt-1 -mr-1 inline-flex size-9 shrink-0 items-center justify-center rounded-md text-subtle transition-colors hover:bg-sunken hover:text-fg"
-            >
-              <X weight="bold" className="size-4" aria-hidden="true" />
-            </Dialog.Close>
-          </div>
-          <div className="mt-6">
-            {shown?.mode === "send" ? (
-              <SendToDesktop installerHref={shown.href} targetOs={shown.os} />
-            ) : os ? (
-              steps[os]
-            ) : null}
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
+  return shown || everShown ? (
+    <DownloadDialog shown={shown} visitorOs={visitorOs} steps={steps} onClose={() => setShown(null)} opener={opener} />
+  ) : null;
 }
