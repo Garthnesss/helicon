@@ -405,7 +405,7 @@ export const GUIDE_PAGES: SeoPage[] = [
         kind: "ul",
         items: [
           "The muse CLI, installed and signed in once with `muse login`. The extension uses that login and never asks for an API key.",
-          "A Muse Code plan, or pay-as-you-go billing on Meta's Model API. The free Muse app doesn't include Muse Code.",
+          "A Meta sign-in or a Model API key for Muse Code, on one of its 4 subscription plans or pay-per-token billing.",
           "VS Code 1.101 or later. The extension runs on the editor's own Node runtime and needs Node 22 or newer.",
         ],
       },
@@ -510,8 +510,8 @@ export const GUIDE_PAGES: SeoPage[] = [
         a: "No. Helicon is an unofficial community project, MIT licensed, and not affiliated with or endorsed by Meta. It drives the muse CLI you already have.",
       },
       {
-        q: "Does it work with the free Muse app?",
-        a: "No. Muse Code needs a Muse Code plan or pay-as-you-go billing on Meta's Model API, and the free Muse app doesn't include it. The extension itself is free.",
+        q: "What do I need from Meta?",
+        a: "Muse Code needs a Meta credential: a browser sign-in or a Model API key. Billing is one of its 4 subscription plans, or pay per token with the API key. The extension itself is free.",
       },
       {
         q: "Do I need an API key?",
@@ -578,7 +578,7 @@ export const GUIDE_PAGES: SeoPage[] = [
         kind: "ul",
         items: [
           "The muse CLI, installed and signed in once with `muse login`. The extension uses that login and never asks for an API key.",
-          "A Muse Code plan, or pay-as-you-go billing on Meta's Model API. The free Muse app doesn't include Muse Code.",
+          "A Meta sign-in or a Model API key for Muse Code, on one of its 4 subscription plans or pay-per-token billing.",
           "A current release of Cursor, Windsurf or Antigravity. The extension runs on the editor's own Node runtime and needs Node 22 or newer.",
         ],
       },
@@ -670,8 +670,8 @@ export const GUIDE_PAGES: SeoPage[] = [
         a: "No. It is a panel for Muse Code, running next to whatever else your editor has.",
       },
       {
-        q: "Does it work with the free Muse app?",
-        a: "No. Muse Code needs a Muse Code plan or pay-as-you-go billing on Meta's Model API, and the free Muse app doesn't include it. The extension itself is free.",
+        q: "What do I need from Meta?",
+        a: "Muse Code needs a Meta credential: a browser sign-in or a Model API key. Billing is one of its 4 subscription plans, or pay per token with the API key. The extension itself is free.",
       },
       {
         q: "Is Helicon official?",
