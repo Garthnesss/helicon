@@ -26,6 +26,7 @@ import { HeliconStore, type ExecFn, type ServeTarget } from "@helicon/daemon";
 interface Call {
   method: string;
   params?: Record<string, unknown>;
+  options?: { commandId?: string };
 }
 
 type Reply = unknown | ((params: Record<string, unknown>) => unknown);
@@ -56,8 +57,8 @@ class FakeConnection {
     return reply ?? { ok: true };
   }
 
-  async command(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-    this.calls.push({ method, params });
+  async command(method: string, params: Record<string, unknown> = {}, options?: { commandId?: string }): Promise<unknown> {
+    this.calls.push(options === undefined ? { method, params } : { method, params, options });
     return this.answer(method, params);
   }
 
@@ -335,6 +336,30 @@ describe("HeliconServer", () => {
     assert.equal((await send(base, "/api/user-input/clarify", { sessionId: "s", userInputId: "u" })).status, 400);
     const bad = await fetch(`${base}/api/turns`, { method: "POST", body: "{nope" });
     assert.equal(bad.status, 400);
+  });
+
+  it("threads a caller-supplied commandId through turn/start and rejects bad ones (#55)", async () => {
+    const connection = new FakeConnection();
+    const { base } = await start(connection);
+    await send(base, "/api/sessions", { cwd: "/w" });
+
+    const turn = await send(base, "/api/turns", { sessionId: "s1", text: "hello", commandId: "cmd-1" });
+    assert.equal(turn.status, 200);
+    assert.deepEqual(connection.calls.at(-1)?.options, { commandId: "cmd-1" });
+
+    // A retry of the same logical send replays under the same id.
+    const retry = await send(base, "/api/turns", { sessionId: "s1", text: "hello", commandId: "cmd-1" });
+    assert.equal(retry.status, 200);
+    assert.deepEqual(connection.calls.at(-1)?.options, { commandId: "cmd-1" });
+
+    // Omitted ids keep the old behavior: no options at all.
+    const plain = await send(base, "/api/turns", { sessionId: "s1", text: "hello" });
+    assert.equal(plain.status, 200);
+    assert.equal(connection.calls.at(-1)?.options, undefined);
+
+    assert.equal((await send(base, "/api/turns", { sessionId: "s1", text: "x", commandId: "" })).status, 400);
+    assert.equal((await send(base, "/api/turns", { sessionId: "s1", text: "x", commandId: 42 })).status, 400);
+    assert.equal((await send(base, "/api/turns", { sessionId: "s1", text: "x", commandId: "y".repeat(129) })).status, 400);
   });
 
   it("requires a token when one is configured", async () => {
@@ -1091,10 +1116,10 @@ describe("HeliconServer", () => {
     assert.deepEqual(await get(base, "/api/sandbox-settings"), { disabled: true }, "a rejected patch changes nothing");
   });
 
-  it("keeps feed settings behind a boolean switch, defaulting to catch-up off", async () => {
+  it("keeps feed settings behind a boolean switch, defaulting to catch-up on", async () => {
     const connection = new FakeConnection();
     const { base } = await start(connection);
-    assert.deepEqual(await get(base, "/api/feed-settings"), { catchUp: false });
+    assert.deepEqual(await get(base, "/api/feed-settings"), { catchUp: true });
 
     const patched = await send(base, "/api/feed-settings", { catchUp: true }, "PATCH");
     assert.equal(patched.status, 200);
@@ -1835,8 +1860,8 @@ describe("a session Muse stops pushing", () => {
     const connection = new FakeConnection();
     const muse = quietSession(connection);
     const { base } = await start(connection);
-    // Catch-up is left off, as it is by default: a history load is put right whether or not it is on.
-    assert.deepEqual(await get(base, "/api/feed-settings"), { catchUp: false });
+    // Catch-up is on, as it is by default: a history load is put right whether or not it is on.
+    assert.deepEqual(await get(base, "/api/feed-settings"), { catchUp: true });
     await send(base, "/api/sessions", { cwd: "/work/proj" });
     muse.event("turn/started", { turnId: "t1" });
     muse.event("item/started", { item: { itemId: "open", kind: "toolCall", revision: 1, status: "inProgress" } });
@@ -1856,7 +1881,7 @@ describe("a session Muse stops pushing", () => {
     const connection = new FakeConnection();
     const muse = quietSession(connection);
     const { base } = await start(connection);
-    assert.deepEqual(await get(base, "/api/feed-settings"), { catchUp: false });
+    assert.deepEqual(await get(base, "/api/feed-settings"), { catchUp: true });
     await send(base, "/api/sessions", { cwd: "/work/proj" });
     muse.event("turn/started", { turnId: "t1" });
     muse.record.activeTurnId = "t1";
@@ -1873,10 +1898,11 @@ describe("a session Muse stops pushing", () => {
     assert.deepEqual(died.json.events.map((e: { method: string }) => e.method), ["turn/started", "turn/completed"]);
   });
 
-  it("asks Muse nothing about a quiet session while catch-up is off, which it is by default", async () => {
+  it("asks Muse nothing about a quiet session while catch-up is explicitly switched off", async () => {
     const connection = new FakeConnection();
     const muse = quietSession(connection);
     const { base } = await start(connection, { tailTiming: FAST_TAIL });
+    await catchUp(base, false);
     await send(base, "/api/sessions", { cwd: "/work/proj" });
     const old = muse.event("item/completed", { item: { itemId: "old", kind: "agentMessage", revision: 1, status: "completed", text: "earlier" } });
     connection.notify(old.method, old.params);
@@ -1908,6 +1934,7 @@ describe("a session Muse stops pushing", () => {
     const connection = new FakeConnection();
     const muse = quietSession(connection);
     const { base } = await start(connection, { tailTiming: FAST_TAIL });
+    await catchUp(base, false);
     await send(base, "/api/sessions", { cwd: "/work/proj" });
     const started = muse.event("turn/started", { turnId: "t1" });
     connection.notify(started.method, started.params);

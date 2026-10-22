@@ -118,13 +118,14 @@ export const DEFAULT_YOLO_SETTINGS: YoloSettings = { enabled: false };
 
 /**
  * Server-owned feed mode: whether a session Muse stops pushing updates for is asked for them
- * instead. Off by default.
+ * instead. On by default: without it a dead push feed leaves the thread frozen on a spinner
+ * (HarjjotSinghh/helicon#42). Users who explicitly switched it off keep it off.
  */
 export interface FeedSettings {
   catchUp: boolean;
 }
 
-export const DEFAULT_FEED_SETTINGS: FeedSettings = { catchUp: false };
+export const DEFAULT_FEED_SETTINGS: FeedSettings = { catchUp: true };
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -419,7 +420,7 @@ export class HeliconStore {
     return next;
   }
 
-  /** Malformed rows fall back to catch-up off rather than breaking server startup. */
+  /** Malformed rows fall back to the default (catch-up on) rather than breaking server startup. */
   getFeedSettings(): FeedSettings {
     const row = this.db.prepare(`SELECT value FROM settings WHERE key = 'feed'`).get() as Row | undefined;
     if (!row) {

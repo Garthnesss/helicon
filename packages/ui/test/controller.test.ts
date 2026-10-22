@@ -48,6 +48,7 @@ class FakeClient implements HeliconClient {
     ifBusy?: string;
     displayText?: string;
     attachments?: { name: string; mediaType: string; base64: string }[];
+    commandId?: string;
   }[] = [];
   actions: string[] = [];
   orders: string[][] = [];
@@ -97,7 +98,7 @@ class FakeClient implements HeliconClient {
   async sendTurn(
     sessionId: string,
     text: string,
-    options?: { ifBusy?: string; displayText?: string; attachments?: { name: string; mediaType: string; base64: string }[] },
+    options?: { ifBusy?: string; displayText?: string; attachments?: { name: string; mediaType: string; base64: string }[]; commandId?: string },
   ) {
     this.sent.push({
       sessionId,
@@ -105,6 +106,7 @@ class FakeClient implements HeliconClient {
       ifBusy: options?.ifBusy,
       displayText: options?.displayText,
       attachments: options?.attachments,
+      commandId: options?.commandId,
     });
     return this.sendResult();
   }
@@ -1045,6 +1047,63 @@ describe("HeliconController", () => {
     await settle();
     fold = controller.store.get().threads["s1"]!.fold;
     assert.equal(fold.echoes.length, 0);
+    stop();
+  });
+
+  it("mints one commandId per send, and reuses it when the send is retried (#55)", async () => {
+    const client = new FakeClient();
+    const { controller, stop } = await started(client);
+    await controller.send("first thing");
+    await controller.send("second thing");
+    const [first, second] = client.sent.slice(-2);
+    assert.match(first.commandId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.notEqual(first.commandId, second.commandId, "separate sends are separate commands");
+    stop();
+  });
+
+  it("replays the same commandId when a send is retried after sessionNotLoaded (#55)", async () => {
+    const client = new FakeClient();
+    let attempts = 0;
+    client.sendResult = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new HeliconError("session not loaded", 500, "sessionNotLoaded");
+      }
+      return { turnId: "t9", disposition: "started" };
+    };
+    const { controller, stop } = await started(client);
+    assert.equal(await controller.send("retry me"), true);
+    assert.equal(client.sent.length, 2, "first attempt plus one retry");
+    assert.equal(client.sent[0].commandId, client.sent[1].commandId, "the retry replays the same id");
+    assert.match(client.sent[0].commandId ?? "", /^[0-9a-f-]{36}$/);
+    stop();
+  });
+
+  it("stop() clears a turn the host already finished, instead of waiting on its lost event", async () => {
+    const client = new FakeClient();
+    const { controller, stop } = await started(client);
+    await controller.send("do the thing");
+    assert.equal(controller.store.get().threads["s1"]!.fold.activeTurnId, "t9");
+    // The host reports no active turn: its turn/completed never arrived here.
+    client.transcript = async () => load();
+    await controller.stop("s1");
+    const thread = controller.store.get().threads["s1"]!;
+    assert.equal(thread.fold.activeTurnId, null);
+    assert.equal(thread.stalled, false);
+    // And the next send goes out as a fresh turn, not queued behind a ghost.
+    await controller.send("after the stop");
+    assert.equal(client.sent.at(-1)?.ifBusy, undefined);
+    stop();
+  });
+
+  it("stop() keeps the turn when the host still reports it running", async () => {
+    const client = new FakeClient();
+    const { controller, stop } = await started(client);
+    await controller.send("do the thing");
+    client.transcript = async () =>
+      load({ msp: { status: "running", activeTurnId: "t9", modelId: null, approvalMode: null, workspaceRoot: null, turnCount: 3 } });
+    await controller.stop("s1");
+    assert.equal(controller.store.get().threads["s1"]!.fold.activeTurnId, "t9");
     stop();
   });
 

@@ -60,9 +60,11 @@ export type ProtocolErrorHandler = (error: unknown) => void;
 /**
  * The slice of the SDK connection Helicon uses. `command` mints a `commandId` for
  * state-changing verbs; `request` sends read-only queries (lists, reads, pages) as-is.
+ * A caller-supplied `commandId` reuses the id for a replay of the same logical command,
+ * so a retried send can never double-execute on the host (HarjjotSinghh/helicon#55).
  */
 export interface CommandConnection {
-  command(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  command(method: string, params?: Record<string, unknown>, options?: { commandId?: string }): Promise<unknown>;
   request?(method: string, params?: Record<string, unknown>): Promise<unknown>;
   onNotification(handler: NotificationHandler): void;
   /** Optional: older connections and the test doubles do not have it. */
@@ -137,6 +139,11 @@ export interface SendTurnOptions {
   ifBusy?: string;
   reasoningEffort?: string;
   images?: TurnImage[];
+  /**
+   * Idempotency key for this logical send. Reused across retries of the same send so the
+   * host executes it once; omitted callers get the SDK's per-call minted id as before.
+   */
+  commandId?: string;
 }
 
 /** Prompt parts in order: the text the user typed, then each image they attached. */
@@ -315,7 +322,8 @@ export class SessionManager {
     if (options.reasoningEffort !== undefined) {
       params["reasoningEffort"] = options.reasoningEffort;
     }
-    return toTurnAck(await this.connection.command("turn/start", params));
+    const commandOptions = options.commandId !== undefined ? { commandId: options.commandId } : undefined;
+    return toTurnAck(await this.connection.command("turn/start", params, commandOptions));
   }
 
   async steerTurn(

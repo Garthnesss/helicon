@@ -1228,6 +1228,9 @@ export class HeliconController {
     text: string,
     options: TurnDelivery,
     retried: boolean,
+    // One id per logical send, minted on the first attempt and reused by the retry below:
+    // the host replays a repeated commandId instead of starting a second turn (#55).
+    commandId: string = crypto.randomUUID(),
   ): Promise<boolean> {
     const thread = this.state.threads[sessionId];
     if (!thread) {
@@ -1262,6 +1265,7 @@ export class HeliconController {
         reasoningEffort: this.state.prefs.effort ?? undefined,
         displayText: options.displayText,
         attachments: options.attachments,
+        commandId,
       });
       const disposition: LocalEcho["disposition"] =
         ack.disposition === "queued" ? "queued" : ack.disposition === "steered" ? "steered" : "started";
@@ -1287,8 +1291,10 @@ export class HeliconController {
       if (!retried && (kind === "sessionNotLoaded" || kind === "sessionStreamMismatch")) {
         await this.loadThread(sessionId);
         // The retry re-sends under this key, so it must not trip over its own guard.
+        // It keeps the same commandId: if the first attempt reached the host, this
+        // replays it instead of starting a duplicate turn (#55).
         this.inflightSends.delete(key);
-        return this.sendToThread(sessionId, text, options, true);
+        return this.sendToThread(sessionId, text, options, true, commandId);
       }
       this.toast("error", "Message not sent", errorMessage(error));
       return false;
@@ -1314,11 +1320,43 @@ export class HeliconController {
     this.setBusy(key, true);
     try {
       await this.client.interruptTurn(sessionId, this.state.threads[sessionId]?.fold.activeTurnId ?? undefined);
+      // The fold clears activeTurnId when the host's turn/completed arrives. If that event is
+      // lost, the next send goes out queued/steered against a finished turn and the host
+      // rejects it. Reconcile against the host's own record instead of waiting indefinitely.
+      await this.reconcileActiveTurn(sessionId);
     } catch (error) {
       this.toast("error", "Could not stop the turn", errorMessage(error));
     } finally {
       this.setBusy(key, false);
     }
+  }
+
+  /**
+   * Aligns the fold's activeTurnId with what the host reports, for after an interrupt:
+   * the turn/completed event the fold waits for may never arrive on a dead push feed.
+   */
+  private async reconcileActiveTurn(sessionId: string): Promise<void> {
+    let load;
+    try {
+      load = await this.client.loadTranscript(sessionId);
+    } catch {
+      // A failed read changes nothing; the turn/completed event still clears the
+      // fold when it arrives.
+      return;
+    }
+    const activeTurnId = load.msp?.activeTurnId ?? null;
+    this.update((s) => {
+      const thread = s.threads[sessionId];
+      if (!thread) {
+        return s;
+      }
+      const fold = thread.fold.activeTurnId === activeTurnId ? thread.fold : { ...thread.fold, activeTurnId };
+      // No turn running means no stuck turn: the stalled notice goes, mirroring reloadThread.
+      const stalled = activeTurnId === null ? false : thread.stalled;
+      return fold === thread.fold && stalled === thread.stalled
+        ? s
+        : { ...s, threads: { ...s.threads, [sessionId]: { ...thread, fold, stalled } } };
+    });
   }
 
   async unqueue(sessionId: string, echo: LocalEcho): Promise<void> {

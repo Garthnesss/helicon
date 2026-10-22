@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Catch-up is now on by default.** "Keep threads live when Muse goes quiet" (Settings) ships enabled: when Muse stops pushing updates for a session, Helicon pages the session for them instead of leaving the thread frozen on a spinner. Anyone who explicitly switched it off keeps it off.
+
+### Fixed
+
+- **A retried send can no longer start a duplicate turn** ([#55](https://github.com/HarjjotSinghh/helicon/issues/55)). Every send now carries an idempotency key end to end (UI → REST → daemon → MSP `commandId`); if the first attempt reached the host and only its answer was lost, the retry replays it instead of starting a second turn.
+- **Stop no longer strands the next prompt.** After an interrupt, Helicon reconciles the thread against the host's own record instead of waiting indefinitely for a `turn/completed` event that may never arrive — so the follow-up send goes out as a fresh turn rather than erroring against a ghost.
+
 ## 0.22.3
 
 ### New

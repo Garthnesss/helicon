@@ -13,15 +13,15 @@ import {
 } from "../src/sessions.js";
 
 class FakeConnection implements CommandConnection {
-  calls: { method: string; params?: Record<string, unknown> }[] = [];
+  calls: { method: string; params?: Record<string, unknown>; options?: { commandId?: string } }[] = [];
   private replies = new Map<string, unknown>();
 
   reply(method: string, value: unknown): void {
     this.replies.set(method, value);
   }
 
-  async command(method: string, params?: Record<string, unknown>): Promise<unknown> {
-    this.calls.push({ method, params });
+  async command(method: string, params?: Record<string, unknown>, options?: { commandId?: string }): Promise<unknown> {
+    this.calls.push(options === undefined ? { method, params } : { method, params, options });
     if (this.replies.has(method)) {
       return this.replies.get(method);
     }
@@ -34,7 +34,7 @@ class FakeConnection implements CommandConnection {
 function lastCall(conn: FakeConnection) {
   const call = conn.calls[conn.calls.length - 1];
   assert.ok(call);
-  return call as { method: string; params?: Record<string, unknown> };
+  return call as { method: string; params?: Record<string, unknown>; options?: { commandId?: string } };
 }
 
 describe("SessionManager", () => {
@@ -142,6 +142,20 @@ describe("SessionManager", () => {
       method: "turn/unqueue",
       params: { sessionId: "s1", turnId: "t2" },
     });
+    assert.equal(lastCall(conn).options, undefined, "no commandId, no options");
+  });
+
+  it("forwards a caller-supplied commandId so a retried send replays instead of duplicating (#55)", async () => {
+    const conn = new FakeConnection();
+    conn.reply("turn/start", { status: "accepted", turnId: "t1", disposition: "started" });
+    const manager = new SessionManager(conn);
+    await manager.sendTurn("s1", "hello", { commandId: "cmd-123" });
+    assert.deepEqual(lastCall(conn).options, { commandId: "cmd-123" });
+    // The retry of the same logical send carries the same id and the same payload.
+    await manager.sendTurn("s1", "hello", { commandId: "cmd-123" });
+    const [first, second] = conn.calls.slice(-2);
+    assert.deepEqual(second.options, { commandId: "cmd-123" });
+    assert.deepEqual(second.params, first.params);
   });
 
   it("decides approvals with the race guard intact", async () => {

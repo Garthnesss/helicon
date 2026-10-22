@@ -186,10 +186,10 @@ describe("HeliconStore", () => {
     assert.deepEqual(store.setYoloSettings({ enabled: false }), { enabled: false });
   });
 
-  it("keeps feed settings, defaulting to catch-up off", () => {
+  it("keeps feed settings, defaulting to catch-up on", () => {
     const store = new HeliconStore();
     after(() => store.close());
-    assert.deepEqual(store.getFeedSettings(), { catchUp: false });
+    assert.deepEqual(store.getFeedSettings(), { catchUp: true });
     assert.deepEqual(store.setFeedSettings({ catchUp: true }), { catchUp: true });
     assert.deepEqual(store.getFeedSettings(), { catchUp: true });
     assert.deepEqual(store.setFeedSettings({}), { catchUp: true }, "an empty patch changes nothing");

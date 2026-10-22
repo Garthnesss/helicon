@@ -59,6 +59,11 @@ export interface TurnOptions {
   displayText?: string;
   /** Files the user attached: images reach the model, anything else lands in the workspace as a mention. */
   attachments?: OutgoingAttachment[];
+  /**
+   * Idempotency key for this logical send, minted by the UI per user send and reused
+   * across retries, so a retried turn/start replays instead of double-executing (#55).
+   */
+  commandId?: string;
 }
 
 export interface ApprovalDecisionInput {

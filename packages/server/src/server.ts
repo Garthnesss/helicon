@@ -1762,6 +1762,10 @@ export class HeliconServer {
       if (effort !== undefined && effort !== null && !isReasoningEffort(effort)) {
         throw new HttpError(400, "Unknown reasoningEffort.");
       }
+      const commandId = body["commandId"];
+      if (commandId !== undefined && commandId !== null && (typeof commandId !== "string" || commandId.length === 0 || commandId.length > 128)) {
+        throw new HttpError(400, "commandId must be a non-empty string of at most 128 characters.");
+      }
       const manager = await this.managerForSession(sessionId);
       if (typeof effort === "string") {
         await this.applyEffort(manager, sessionId, effort);
@@ -1773,6 +1777,9 @@ export class HeliconServer {
         ifBusy: typeof ifBusy === "string" ? ifBusy : undefined,
         reasoningEffort: typeof effort === "string" ? effort : undefined,
         images: prepared.images,
+        // Idempotency key for this logical send: reused across retries so a
+        // retried turn/start replays instead of double-executing (#55).
+        commandId: typeof commandId === "string" ? commandId : undefined,
       });
       // The saved attachments go back with the ack: the open thread shows them without waiting for a reload.
       const saved = prepared.files.map((file, index) =>
